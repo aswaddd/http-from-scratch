@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 
 	"aswad.http.module/internal/headers"
 )
@@ -13,6 +14,7 @@ type parserState string
 const (
 	StateInit    parserState = "init"
 	StateHeaders parserState = "headers"
+	StateBody    parserState = "body"
 	StateDone    parserState = "done"
 )
 
@@ -25,13 +27,27 @@ type RequestLine struct {
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        string
 	state       parserState
+}
+
+func getInt(headers *headers.Headers, name string, defaultValue int) int {
+	valueStr, exists := headers.Get(name)
+	if !exists {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
 }
 
 func newRequest() *Request {
 	return &Request{
 		state:   StateInit,
 		Headers: *headers.NewHeaders(),
+		Body:    "",
 	}
 }
 
@@ -67,11 +83,21 @@ func parseRequestLine(b []byte) (*RequestLine, int, error) {
 	return rl, read, nil
 }
 
+func (r *Request) hasBody() bool {
+	// TODO: when doing chunked, update this
+	length := getInt(&r.Headers, "content-length", 0)
+	return length > 0
+}
+
 func (r *Request) parse(data []byte) (int, error) {
 	read := 0
 outer:
 	for {
 		currentData := data[read:]
+		if len(currentData) == 0 {
+			break outer
+		}
+
 		switch r.state {
 		case StateInit:
 			rl, n, err := parseRequestLine((currentData))
@@ -99,9 +125,29 @@ outer:
 
 			read += n
 
+			// wont get EOF after reading data
 			if done {
+				if r.hasBody() {
+					r.state = StateBody
+				} else {
+					r.state = StateDone
+				}
+			}
+		case StateBody:
+			length := getInt(&r.Headers, "content-length", 0)
+			if length == 0 {
+				r.state = StateDone
+				break
+			}
+
+			remaining := min(length-len(r.Body), len(currentData))
+			r.Body += string(currentData[:remaining])
+			read += remaining
+
+			if len(r.Body) == length {
 				r.state = StateDone
 			}
+
 		case StateDone:
 			break outer
 		default:
@@ -124,20 +170,33 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, 1024)
 	bufLen := 0
 	for !request.done() {
-		n, err := reader.Read(buf[bufLen:])
-		// TODO: what to do here
-		if err != nil {
-			return nil, err
+		if bufLen == len(buf) {
+			return nil, fmt.Errorf("request too large")
+		}
+
+		n, readErr := reader.Read(buf[bufLen:])
+		if readErr != nil && readErr != io.EOF {
+			return nil, readErr
+		}
+		if n == 0 && readErr == nil {
+			return nil, io.ErrNoProgress
 		}
 
 		bufLen += n
 
-		readN, err := request.parse(buf[:bufLen])
-		if err != nil {
-			return nil, err
+		readN, parseErr := request.parse(buf[:bufLen])
+		if parseErr != nil {
+			return nil, parseErr
 		}
 		copy(buf, buf[readN:bufLen])
 		bufLen -= readN
+
+		if readErr == io.EOF {
+			if request.done() {
+				break
+			}
+			return nil, io.ErrUnexpectedEOF
+		}
 	}
 
 	return request, nil

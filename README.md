@@ -46,6 +46,8 @@ video response:
 curl -i http://localhost:42069/video --output vim.mp4
 ```
 
+note: you can also open http://localhost:42069/video in your browser and the video should play directly.
+
 ## run tests
 
 ```bash

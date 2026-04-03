@@ -43,7 +43,7 @@ func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
 	case StatusBadRequest:
 		statusLine = []byte("HTTP/1.1 400 Bad Request\r\n")
 	case StatusInternalServerError:
-		statusLine = []byte("HTTP/1.1 500 Bad Internal Server Error\r\n")
+		statusLine = []byte("HTTP/1.1 500 Internal Server Error\r\n")
 	default:
 		return fmt.Errorf("unrecognized error code")
 	}
